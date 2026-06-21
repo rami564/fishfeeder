@@ -1,0 +1,28 @@
+{
+	"folders": [
+		{
+			"path": "../.."
+		},
+		{
+			"name": "Fishfeeder",
+			"path": ".."
+		}
+	],
+	"settings": {
+		"chat.tools.terminal.autoApprove": {
+			"pip3": true,
+			"pipx": true,
+			"pio": true,
+			"hash": true,
+			"groups": true,
+			"/^sudo pio run --target upload$/": {
+				"approve": true,
+				"matchCommandLine": true
+			},
+			"/^sudo /home/rami-morad/\\.local/bin/pio run --target upload$/": {
+				"approve": true,
+				"matchCommandLine": true
+			}
+		}
+	}
+}
