@@ -1,6 +1,8 @@
 #include <Arduino.h>
 #include <WiFi.h>
 #include <WebServer.h>
+#include <ESPmDNS.h>
+#include <ArduinoOTA.h>
 
 // ============================================
 // Configuration - UPDATE THESE VALUES
@@ -8,10 +10,15 @@
 const char* WIFI_SSID = "Linksys";        // Change to your WiFi name
 const char* WIFI_PASSWORD = "p1cass00"; // Change to your WiFi password
 
+// OTA Configuration
+const char* OTA_HOSTNAME = "fishfeeder";   // mDNS name (access via fishfeeder.local)
+const char* OTA_PASSWORD = "fish2024";     // Password for OTA updates (CHANGE THIS!)
+
 // Pin Definitions
 const int LED_FEED_PIN = 2;     // GPIO2 for feed indicator LED
 const int LED_STATUS_PIN = 8;   // GPIO8 for status LED (built-in on some boards)
 const int LED_WIFI_PIN = 10;    // GPIO10 for WiFi indicator LED (optional)
+const int MOTOR_CONTROL_PIN = 4; // GPIO4 for motor control (active low)
 
 // LED Blink Configuration
 const int FEED_BLINK_TIMES = 5;      // Number of times to blink when feeding
@@ -26,6 +33,8 @@ WebServer server(80);
 // Function Declarations
 // ============================================
 void setupWiFi();
+void setupMDNS();
+void setupOTA();
 void setupWebServer();
 void handleRoot();
 void handleFeed();
@@ -53,10 +62,21 @@ void setup() {
   digitalWrite(LED_STATUS_PIN, LOW);
   digitalWrite(LED_WIFI_PIN, LOW);
   
+  // Initialize motor control pin (idle = HIGH)
+  pinMode(MOTOR_CONTROL_PIN, OUTPUT);
+  digitalWrite(MOTOR_CONTROL_PIN, HIGH);
+  
   Serial.println("✓ LED pins initialized");
+  Serial.println("✓ Motor control pin initialized");
   
   // Connect to WiFi
   setupWiFi();
+  
+  // Setup mDNS (fishfeeder.local)
+  setupMDNS();
+  
+  // Setup OTA (Over-The-Air updates)
+  setupOTA();
   
   // Start web server
   setupWebServer();
@@ -72,6 +92,7 @@ void setup() {
 // Main Loop
 // ============================================
 void loop() {
+  ArduinoOTA.handle();  // Handle OTA updates
   server.handleClient();
 }
 
@@ -107,6 +128,79 @@ void setupWiFi() {
 }
 
 // ============================================
+// mDNS Setup
+// ============================================
+void setupMDNS() {
+  if (MDNS.begin(OTA_HOSTNAME)) {
+    Serial.println("✓ mDNS responder started");
+    Serial.print("  Access via: http://");
+    Serial.print(OTA_HOSTNAME);
+    Serial.println(".local");
+    
+    // Add service to mDNS-SD
+    MDNS.addService("http", "tcp", 80);
+  } else {
+    Serial.println("✗ Error setting up mDNS responder");
+  }
+}
+
+// ============================================
+// OTA Setup
+// ============================================
+void setupOTA() {
+  ArduinoOTA.setHostname(OTA_HOSTNAME);
+  ArduinoOTA.setPassword(OTA_PASSWORD);
+  
+  ArduinoOTA.onStart([]() {
+    String type;
+    if (ArduinoOTA.getCommand() == U_FLASH) {
+      type = "sketch";
+    } else {  // U_SPIFFS
+      type = "filesystem";
+    }
+    Serial.println("\n>>> OTA Update Starting (" + type + ")...");
+    // Turn off WiFi LED during update
+    digitalWrite(LED_WIFI_PIN, LOW);
+    // Blink status LED rapidly during update
+    digitalWrite(LED_STATUS_PIN, HIGH);
+  });
+  
+  ArduinoOTA.onEnd([]() {
+    Serial.println("\n✓ OTA Update Complete!");
+    digitalWrite(LED_STATUS_PIN, LOW);
+  });
+  
+  ArduinoOTA.onProgress([](unsigned int progress, unsigned int total) {
+    static unsigned long lastPrint = 0;
+    if (millis() - lastPrint > 1000) {  // Print every second
+      Serial.printf("  Progress: %u%%\r", (progress / (total / 100)));
+      // Blink LED during update
+      digitalWrite(LED_STATUS_PIN, !digitalRead(LED_STATUS_PIN));
+      lastPrint = millis();
+    }
+  });
+  
+  ArduinoOTA.onError([](ota_error_t error) {
+    Serial.printf("✗ OTA Error[%u]: ", error);
+    if (error == OTA_AUTH_ERROR) Serial.println("Auth Failed");
+    else if (error == OTA_BEGIN_ERROR) Serial.println("Begin Failed");
+    else if (error == OTA_CONNECT_ERROR) Serial.println("Connect Failed");
+    else if (error == OTA_RECEIVE_ERROR) Serial.println("Receive Failed");
+    else if (error == OTA_END_ERROR) Serial.println("End Failed");
+    
+    // Blink error pattern (fast blinks)
+    for (int i = 0; i < 5; i++) {
+      blinkLED(LED_STATUS_PIN, 3, 100);
+      delay(200);
+    }
+  });
+  
+  ArduinoOTA.begin();
+  Serial.println("✓ OTA update service started");
+  Serial.println("  Password protected for security");
+}
+
+// ============================================
 // Web Server Setup
 // ============================================
 void setupWebServer() {
@@ -119,7 +213,10 @@ void setupWebServer() {
   Serial.println("✓ Web server started");
   if (WiFi.status() == WL_CONNECTED) {
     Serial.print("  Access at: http://");
-    Serial.println(WiFi.localIP());
+    Serial.print(WiFi.localIP());
+    Serial.print(" or http://");
+    Serial.print(OTA_HOSTNAME);
+    Serial.println(".local");
   }
 }
 
@@ -339,20 +436,14 @@ void handleNotFound() {
 // Food Dispensing Function
 // ============================================
 void dispenseFoodOnce() {
-  Serial.println("  → Blinking LED to simulate feeding...");
+  Serial.println("  → Activating motor (IO4 LOW for 500ms)...");
   
-  // Blink the feed LED multiple times
-  for (int i = 0; i < FEED_BLINK_TIMES; i++) {
-    digitalWrite(LED_FEED_PIN, HIGH);
-    digitalWrite(LED_STATUS_PIN, HIGH);
-    delay(FEED_BLINK_DURATION_MS);
-    
-    digitalWrite(LED_FEED_PIN, LOW);
-    digitalWrite(LED_STATUS_PIN, LOW);
-    delay(FEED_BLINK_DURATION_MS);
-  }
+  // Pull IO4 to ground to activate motor
+  digitalWrite(MOTOR_CONTROL_PIN, LOW);
+  delay(500);
+  digitalWrite(MOTOR_CONTROL_PIN, HIGH);
   
-  Serial.println("  ✓ Feed simulation complete");
+  Serial.println("  ✓ Motor activation complete");
 }
 
 // ============================================
