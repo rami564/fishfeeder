@@ -1,4 +1,198 @@
-# PLC HTTP Communication Guide
+# PLC Communication Guide
+
+This guide covers both **HTTP (TCP)** and **UDP** communication methods for controlling the Fish Feeder from PLC systems.
+
+---
+
+## Protocol Comparison
+
+| Feature | HTTP (TCP) | UDP |
+|---------|-----------|-----|
+| **Complexity** | Higher | Lower |
+| **Connection** | Stateful (3-way handshake) | Stateless |
+| **Overhead** | ~200 bytes | ~10 bytes |
+| **Response Time** | 50-100ms | <10ms |
+| **Reliability** | Guaranteed delivery | No guarantees |
+| **Parsing** | Complex (headers + JSON) | Simple (direct JSON) |
+| **Best For** | Reliable commands | Fast, real-time control |
+
+**Recommendation:** Use **UDP** for PLC systems - it's simpler, faster, and more suitable for industrial control.
+
+---
+
+# UDP Communication (Recommended for PLC)
+
+## UDP Configuration
+
+### Device Configuration
+Set protocol mode in ESP32 firmware:
+```cpp
+#define PROTOCOL_MODE "BOTH"  // or "UDP" for UDP only
+const int UDP_PORT = 8888;
+```
+
+### PLC Socket Configuration
+```
+Socket Type: UDP Client
+Target IP: 10.10.1.139
+Target Port: 8888
+Protocol: UDP/IP
+```
+
+## UDP Commands
+
+### Command Format
+Send plain ASCII text commands (case-insensitive):
+
+| Command | Purpose | Response |
+|---------|---------|----------|
+| `FEED` | Dispense food | `{"success":true,"message":"Food dispensed"}` |
+| `STATUS` | Get device status | `{"rssi":-45,"uptime":123,"freeHeap":98765,"ip":"10.10.1.139"}` |
+
+### String to Send
+```
+"FEED"
+```
+That's it! Just 4 bytes + newline (if needed).
+
+### Expected Response (FEED)
+```json
+{"success":true,"message":"Food dispensed"}
+```
+
+### Expected Response (STATUS)
+```json
+{"rssi":-45,"uptime":3600,"freeHeap":98765,"ip":"10.10.1.139"}
+```
+
+## V350 Unitronics PLC - UDP Implementation
+
+### Simple UDP Ladder Logic
+```
+1. Create UDP socket (non-blocking)
+2. Set target: IP=10.10.1.139, Port=8888
+3. Send string: "FEED"
+4. Wait for response (timeout: 2 seconds)
+5. Store response in buffer
+6. Parse JSON response
+7. Set feedback bit based on result
+8. Close socket
+```
+
+### Buffer Requirements
+- Send Buffer: 10 bytes (for "FEED" command)
+- Receive Buffer: 128 bytes (for JSON response)
+
+### Minimal Parsing (Easiest)
+```
+IF response contains '"success":true' THEN
+    Feed_Success = TRUE
+ELSE
+    Feed_Success = FALSE
+END IF
+```
+
+### Response Timeout
+- **Recommended:** 2 seconds
+- **Maximum:** 3 seconds
+- **Retry:** Up to 3 attempts with 1 second delay
+
+## UDP Testing Before PLC Implementation
+
+### Using netcat (Linux/Mac)
+```bash
+# Send FEED command
+echo "FEED" | nc -u 10.10.1.139 8888
+
+# Send STATUS command
+echo "STATUS" | nc -u 10.10.1.139 8888
+```
+
+### Using Python Script
+```bash
+# Test connectivity
+./test_udp.py STATUS -i 10.10.1.139
+
+# Test feed command
+./test_udp.py FEED -i 10.10.1.139
+```
+
+### Using socat (Alternative)
+```bash
+echo "FEED" | socat - UDP:10.10.1.139:8888
+```
+
+## UDP Error Handling
+
+### No Response (Timeout)
+```
+Possible causes:
+- ESP32 offline
+- Wrong IP address
+- Wrong UDP port (should be 8888)
+- Firewall blocking UDP
+- Protocol mode not set to "UDP" or "BOTH"
+
+Action:
+- Send STATUS command first to verify connectivity
+- Check network connectivity (ping ESP32)
+- Verify UDP_PORT in firmware
+```
+
+### Invalid Response
+```
+If response doesn't contain "success":
+- Device received command but failed to execute
+- Motor malfunction
+- Internal error
+
+Action:
+- Log response for debugging
+- Retry after 5 seconds
+- Alert operator if multiple failures
+```
+
+## Complete UDP Example (Structured Text)
+
+```
+PROGRAM FishFeeder_UDP
+VAR
+    udpSocket : SOCKET_UDP;
+    targetIP : STRING := '10.10.1.139';
+    targetPort : INT := 8888;
+    sendBuffer : STRING := 'FEED';
+    recvBuffer : STRING[128];
+    feedSuccess : BOOL := FALSE;
+    timeout : TIME := T#2s;
+END_VAR
+
+(* Open UDP socket *)
+udpSocket.Open();
+
+(* Send command *)
+udpSocket.SendTo(targetIP, targetPort, sendBuffer);
+
+(* Wait for response with timeout *)
+IF udpSocket.ReceiveFrom(recvBuffer, timeout) THEN
+    (* Parse response *)
+    IF FIND(recvBuffer, '"success":true') > 0 THEN
+        feedSuccess := TRUE;
+    ELSE
+        feedSuccess := FALSE;
+    END_IF;
+ELSE
+    (* Timeout - no response *)
+    feedSuccess := FALSE;
+END_IF;
+
+(* Close socket *)
+udpSocket.Close();
+END_PROGRAM
+```
+
+---
+
+# HTTP Communication (Alternative Method)
 
 ## HTTP Request to Send
 
@@ -198,7 +392,7 @@ END IF
 
 ---
 
-## Status Endpoint (Optional)
+## HTTP Status Endpoint (Optional)
 
 ### Get Device Status
 ```bash
@@ -218,27 +412,162 @@ curl http://10.10.1.139/status
 
 ---
 
-## Quick Reference
+# Protocol Selection Guide
 
-### Minimum Required HTTP Request
-```
-POST /feed HTTP/1.1
-Host: 10.10.1.139
+## When to Use UDP (Recommended)
 
-```
-(Note: Double newline at end)
+✅ **Best for:**
+- PLC/SCADA systems
+- Real-time control applications
+- Embedded controllers with limited resources
+- Fast response requirements (<10ms)
+- Simple string parsing capabilities
+- Fire-and-forget commands
 
-### Minimum Success Check
+**Advantages:**
+- Simpler implementation (4 bytes vs 200 bytes)
+- Lower latency
+- Less PLC memory usage
+- No connection management
+- Easier to debug
+
+**Example PLC brands that work well with UDP:**
+- Unitronics (V350, V430, V560, etc.)
+- Allen-Bradley MicroLogix/CompactLogix
+- Siemens S7-1200/1500
+- Modicon M221/M241
+- IDEC MicroSmart
+
+## When to Use HTTP
+
+✅ **Best for:**
+- Web-based HMI systems
+- SCADA with built-in HTTP clients
+- Cloud integration
+- Systems requiring guaranteed delivery
+- Audit trail requirements
+- When UDP is blocked by firewall
+
+**Advantages:**
+- Guaranteed delivery
+- Status codes for error handling
+- Works through most firewalls
+- Better for unreliable networks
+- Standard web protocols
+
+## Side-by-Side Comparison
+
+### UDP Example
 ```
-IF response.contains("200") THEN success = TRUE
+Send: "FEED" (4 bytes)
+Receive: {"success":true,"message":"Food dispensed"} (~50 bytes)
+Time: ~5-10ms
 ```
 
-### IP Address (Update if Changed)
+### HTTP Example
+```
+Send: "POST /feed HTTP/1.1\r\nHost: 10.10.1.139\r\n..." (~200 bytes)
+Receive: HTTP/1.1 200 OK\r\n... {"success":true,...} (~150 bytes)
+Time: ~50-100ms
+```
+
+**UDP is 10x faster and 50x simpler!**
+
+---
+
+## Mixed Protocol Strategy
+
+You can enable both protocols simultaneously:
+```cpp
+#define PROTOCOL_MODE "BOTH"
+```
+
+**Use case:**
+- UDP for time-critical PLC commands (feed operation)
+- HTTP for web HMI monitoring (status dashboard)
+- HTTP for manual override from tablet/phone
+- UDP for automated scheduled feeds
+
+---
+
+## Quick Reference Card
+
+### UDP Quick Reference
+```
+Target: 10.10.1.139:8888
+Command: "FEED" or "STATUS"
+Timeout: 2 seconds
+Buffer: 128 bytes
+Success: Contains '"success":true'
+```
+
+### HTTP Quick Reference
+```
+Target: 10.10.1.139:80
+Request: POST /feed HTTP/1.1\r\nHost: 10.10.1.139\r\n\r\n
+Timeout: 5 seconds
+Buffer: 256 bytes
+Success: Contains "200 OK"
+```
+
+---
+
+## Troubleshooting Both Protocols
+
+### Device Not Responding
+
+**Check list:**
+1. ✓ Ping ESP32: `ping 10.10.1.139`
+2. ✓ Check protocol mode in firmware (UDP/TCP/BOTH)
+3. ✓ Verify port numbers (UDP=8888, HTTP=80)
+4. ✓ Check firewall rules
+5. ✓ Verify ESP32 WiFi connection (check Serial Monitor)
+6. ✓ Test with command line tools first
+
+### UDP-Specific Issues
+- **No response:** Check UDP_PORT is 8888
+- **Wrong response:** Verify command is "FEED" or "STATUS" (case-insensitive)
+- **Firewall:** UDP may be blocked, try HTTP
+
+### HTTP-Specific Issues
+- **404 Error:** Check endpoint is "/feed" not "/FEED"
+- **Timeout:** HTTP takes longer, increase timeout to 5s
+- **Connection refused:** Port 80 might be in use
+
+---
+
+## IP Address (Update if Changed)
 Current IP: `10.10.1.139`
 
 To find current IP:
 ```bash
 ping fishfeeder.local
+# or check ESP32 serial monitor on boot
 ```
 
-Or check ESP32 serial monitor on boot.
+---
+
+## Additional Resources
+
+- **UDP Testing Guide:** See `UDP_TEST_GUIDE.md`
+- **UDP Quick Reference:** See `UDP_QUICK_REF.md`
+- **Main README:** See `README.md`
+- **OTA Updates:** See `OTA_GUIDE.md`
+
+---
+
+## Support Matrix
+
+| PLC/SCADA System | UDP Support | HTTP Support | Recommended |
+|-----------------|-------------|--------------|-------------|
+| Unitronics V-Series | ✅ Excellent | ✅ Good | UDP |
+| Siemens S7 | ✅ Excellent | ✅ Good | UDP |
+| Allen-Bradley | ✅ Good | ✅ Excellent | Either |
+| Modicon M2xx | ✅ Good | ✅ Good | UDP |
+| Ignition SCADA | ✅ Excellent | ✅ Excellent | Either |
+| FactoryTalk | ⚠️ Limited | ✅ Excellent | HTTP |
+| WinCC | ✅ Good | ✅ Good | UDP |
+
+---
+
+**Last Updated:** 2026-07-03

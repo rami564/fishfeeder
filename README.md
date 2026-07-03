@@ -5,12 +5,14 @@ A WiFi-controlled automatic fish feeder using ESP32-C3 microcontroller with web 
 ## Features
 
 - 🌐 **WiFi Control** - Control via web browser from any device on your network
+- 📡 **Dual Protocol Support** - HTTP (web) and UDP server for flexible integration
 - 🎯 **Simple Web Interface** - Clean, mobile-friendly control panel
 - 🔄 **Servo Motor Control** - Precise food dispensing mechanism
 - 💡 **LED Indicators** - Visual feedback for status and WiFi connectivity
 - 📊 **Real-time Status** - Monitor WiFi signal, uptime, and memory usage
 - 🔒 **OTA Updates** - Update firmware wirelessly (no USB cable needed!)
 - 🏷️ **mDNS Support** - Access via `fishfeeder.local` instead of IP address
+- 🏭 **PLC/SCADA Ready** - UDP interface ideal for industrial control systems
 
 ## Hardware Requirements
 
@@ -44,6 +46,27 @@ ESP32-C3 Pin Connections:
 - Ensure common ground between ESP32 and servo power supply
 - GPIO8 may be the built-in LED on some boards (test first)
 
+## Protocol Selection
+
+The fish feeder supports three operating modes:
+
+- **TCP (HTTP only)** - Traditional web interface control
+- **UDP only** - Lightweight protocol for direct commands
+- **BOTH** - Run HTTP and UDP servers simultaneously (default)
+
+Configure in `src/main.cpp`:
+```cpp
+#define PROTOCOL_MODE "BOTH"  // Options: "TCP", "UDP", or "BOTH"
+```
+
+### When to Use Each Protocol
+
+- **HTTP (TCP)** - Best for web browser access, user-friendly interface
+- **UDP** - Ideal for PLC/SCADA systems, automation, low-latency control
+- **BOTH** - Maximum flexibility, suitable for mixed environments
+
+📘 See [UDP_TEST_GUIDE.md](UDP_TEST_GUIDE.md) for UDP commands and testing examples.
+
 ## Software Setup
 
 ### 1. Install PlatformIO
@@ -56,10 +79,16 @@ If you haven't already:
 
 ### 2. Configure WiFi and OTA Credentials
 
-Edit `src/main.cpp` and update these lines (around line 9-13):
+Edit `src/main.cpp` and update these lines (around line 9-18):
 ```cpp
 const char* WIFI_SSID = "YOUR_WIFI_SSID";        // Your WiFi network name
 const char* WIFI_PASSWORD = "YOUR_WIFI_PASSWORD"; // Your WiFi password
+
+// Protocol Selection: "TCP", "UDP", or "BOTH"
+#define PROTOCOL_MODE "BOTH"  // Choose your preferred mode
+
+// UDP Configuration (only used if UDP enabled)
+const int UDP_PORT = 8888;  // UDP listening port
 
 // OTA Configuration
 const char* OTA_HOSTNAME = "fishfeeder";   // mDNS name (access via fishfeeder.local)
@@ -125,6 +154,29 @@ The web interface provides:
 - **WiFi Signal** - Current WiFi signal strength (dBm)
 - **Uptime** - How long the device has been running
 - **Free Memory** - Available heap memory
+
+### UDP Control (Alternative/Additional Method)
+
+If UDP is enabled (`PROTOCOL_MODE` set to "UDP" or "BOTH"), you can control the feeder via UDP commands:
+
+**Quick Test:**
+```bash
+# Send FEED command
+echo "FEED" | nc -u fishfeeder.local 8888
+
+# Get STATUS
+echo "STATUS" | nc -u fishfeeder.local 8888
+```
+
+**UDP Commands:**
+- `FEED` - Dispenses food immediately
+- `STATUS` - Returns device status in JSON format
+
+📘 **Full Documentation:** See [UDP_TEST_GUIDE.md](UDP_TEST_GUIDE.md) for:
+- Python/Node.js examples
+- PLC/SCADA integration
+- Complete command reference
+- Troubleshooting
 
 ### Accessing from Different Devices
 
@@ -216,18 +268,27 @@ Ideas for extending this project:
 - [ ] Schedule automatic feeding times
 - [ ] Add feeding history/log
 - [ ] Implement food level sensor
+- [x] **UDP server support for PLC/SCADA integration** ✅
 - [ ] MQTT integration for smart home
 - [ ] Mobile app (instead of web interface)
 - [ ] Multiple dispense amounts
 - [ ] Water temperature sensor
 - [ ] Camera for monitoring
+- [ ] UDP authentication/encryption
 
 ## Technical Details
+
+### Protocol Support
+- **HTTP (TCP)** - Web server on port 80
+- **UDP** - Command server on port 8888 (configurable)
+- **mDNS** - Resolves `fishfeeder.local` to IP address
+- **OTA** - Over-the-air updates on port 3232
 
 ### Libraries Used
 - **ESP32Servo** (v1.2.0) - Servo motor control for ESP32
 - **ArduinoJson** (v7.0.4) - JSON parsing for API responses
 - **WiFi** (built-in) - WiFi connectivity
+- **WiFiUDP** (built-in) - UDP networking
 - **WebServer** (built-in) - HTTP server
 
 ### Memory Usage

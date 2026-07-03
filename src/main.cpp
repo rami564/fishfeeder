@@ -1,5 +1,6 @@
 #include <Arduino.h>
 #include <WiFi.h>
+#include <WiFiUdp.h>
 #include <WebServer.h>
 #include <ESPmDNS.h>
 #include <ArduinoOTA.h>
@@ -9,6 +10,12 @@
 // ============================================
 const char* WIFI_SSID = "Linksys";        // Change to your WiFi name
 const char* WIFI_PASSWORD = "p1cass00"; // Change to your WiFi password
+
+// Protocol Selection: "TCP", "UDP", or "BOTH"
+#define PROTOCOL_MODE "BOTH"  // Options: "TCP" (HTTP only), "UDP" (UDP only), "BOTH"
+
+// UDP Configuration
+const int UDP_PORT = 8888;  // UDP listening port
 
 // OTA Configuration
 const char* OTA_HOSTNAME = "fishfeeder";   // mDNS name (access via fishfeeder.local)
@@ -28,6 +35,11 @@ const int FEED_BLINK_DURATION_MS = 200; // How long each blink lasts
 // Global Objects
 // ============================================
 WebServer server(80);
+WiFiUDP udpServer;
+
+// Helper macros for protocol selection
+#define USE_TCP (strcmp(PROTOCOL_MODE, "TCP") == 0 || strcmp(PROTOCOL_MODE, "BOTH") == 0)
+#define USE_UDP (strcmp(PROTOCOL_MODE, "UDP") == 0 || strcmp(PROTOCOL_MODE, "BOTH") == 0)
 
 // ============================================
 // Function Declarations
@@ -36,6 +48,8 @@ void setupWiFi();
 void setupMDNS();
 void setupOTA();
 void setupWebServer();
+void setupUDPServer();
+void handleUDPPacket();
 void handleRoot();
 void handleFeed();
 void handleStatus();
@@ -78,8 +92,17 @@ void setup() {
   // Setup OTA (Over-The-Air updates)
   setupOTA();
   
-  // Start web server
-  setupWebServer();
+  // Start servers based on protocol mode
+  Serial.print("Protocol Mode: ");
+  Serial.println(PROTOCOL_MODE);
+  
+  if (USE_TCP) {
+    setupWebServer();
+  }
+  
+  if (USE_UDP) {
+    setupUDPServer();
+  }
   
   // Indicate ready
   blinkLED(LED_STATUS_PIN, 3, 200);
@@ -93,7 +116,14 @@ void setup() {
 // ============================================
 void loop() {
   ArduinoOTA.handle();  // Handle OTA updates
-  server.handleClient();
+  
+  if (USE_TCP) {
+    server.handleClient();
+  }
+  
+  if (USE_UDP) {
+    handleUDPPacket();
+  }
 }
 
 // ============================================
@@ -217,6 +247,95 @@ void setupWebServer() {
     Serial.print(" or http://");
     Serial.print(OTA_HOSTNAME);
     Serial.println(".local");
+  }
+}
+
+// ============================================
+// UDP Server Setup
+// ============================================
+void setupUDPServer() {
+  if (udpServer.begin(UDP_PORT)) {
+    Serial.println("✓ UDP server started");
+    Serial.print("  Listening on port: ");
+    Serial.println(UDP_PORT);
+    if (WiFi.status() == WL_CONNECTED) {
+      Serial.print("  IP Address: ");
+      Serial.println(WiFi.localIP());
+      Serial.println("\n  UDP Commands:");
+      Serial.println("    'FEED' - Dispense food");
+      Serial.println("    'STATUS' - Get device status");
+    }
+  } else {
+    Serial.println("✗ Failed to start UDP server");
+  }
+}
+
+// ============================================
+// UDP Packet Handler
+// ============================================
+void handleUDPPacket() {
+  int packetSize = udpServer.parsePacket();
+  if (packetSize) {
+    char incomingPacket[255];
+    int len = udpServer.read(incomingPacket, 254);
+    if (len > 0) {
+      incomingPacket[len] = '\0';
+    }
+    
+    IPAddress remoteIP = udpServer.remoteIP();
+    uint16_t remotePort = udpServer.remotePort();
+    
+    Serial.print("\n>>> UDP Packet from ");
+    Serial.print(remoteIP);
+    Serial.print(":");
+    Serial.print(remotePort);
+    Serial.print(" - Command: ");
+    Serial.println(incomingPacket);
+    
+    // Process command
+    String command = String(incomingPacket);
+    command.trim();
+    command.toUpperCase();
+    
+    if (command == "FEED") {
+      blinkLED(LED_STATUS_PIN, 1, 100);
+      dispenseFoodOnce();
+      
+      // Send response
+      String response = "{\"success\":true,\"message\":\"Food dispensed\"}";
+      udpServer.beginPacket(remoteIP, remotePort);
+      udpServer.print(response);
+      udpServer.endPacket();
+      
+      Serial.println("  ✓ FEED command executed");
+      
+    } else if (command == "STATUS") {
+      // Send status response
+      String json = "{";
+      json += "\"rssi\":" + String(WiFi.RSSI()) + ",";
+      json += "\"uptime\":" + String(millis() / 1000) + ",";
+      json += "\"freeHeap\":" + String(ESP.getFreeHeap()) + ",";
+      json += "\"ip\":\"" + WiFi.localIP().toString() + "\"";
+      json += "}";
+      
+      udpServer.beginPacket(remoteIP, remotePort);
+      udpServer.print(json);
+      udpServer.endPacket();
+      
+      Serial.println("  ✓ STATUS command executed");
+      
+    } else {
+      // Unknown command
+      String response = "{\"success\":false,\"error\":\"Unknown command\"}";
+      udpServer.beginPacket(remoteIP, remotePort);
+      udpServer.print(response);
+      udpServer.endPacket();
+      
+      Serial.print("  ✗ Unknown command: ");
+      Serial.println(incomingPacket);
+    }
+    
+    Serial.println("<<< UDP Request Completed\n");
   }
 }
 
